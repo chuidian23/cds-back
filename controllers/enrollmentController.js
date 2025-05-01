@@ -125,22 +125,28 @@ const createEnrollment = async (req, res) => {
     });
 
     // Insert into database
-    const [result] = await connection.query(`INSERT INTO enrollments SET ?`, {
-      last_name: lastName,
-      first_name: firstName,
-      middle_name: middleName || null,
-      birthdate: new Date(birthdate).toISOString().split("T")[0],
-      gender: gender,
-      civil_status: civilStatus,
-      mobile_phone: mobilePhone,
-      email: email,
-      course: course,
-      schedule: scheduleJSON, // Must be valid JSON
-      payment_method: paymentMethod,
-      status: "pending",
-      receipt: receiptPath,
-      // Remove enrollment_date and use created_at instead
-    });
+    const [result] = await connection.query(
+      `INSERT INTO enrollments (
+        last_name, first_name, middle_name, birthdate, 
+        gender, civil_status, mobile_phone, email, 
+        course, schedule, payment_method, status, receipt
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
+      [
+        lastName,
+        firstName,
+        middleName || null,
+        new Date(birthdate).toISOString().split("T")[0],
+        gender,
+        civilStatus,
+        mobilePhone,
+        email,
+        course,
+        scheduleJSON,
+        paymentMethod,
+        "pending",
+        receiptPath,
+      ]
+    );
 
     res.status(201).json({
       success: true,
@@ -172,7 +178,7 @@ const updateEnrollmentStatus = async (req, res) => {
     const { status } = req.body;
 
     const [result] = await connection.query(
-      "UPDATE enrollments SET status = ? WHERE id = ?",
+      "UPDATE enrollments SET status = $1 WHERE id = $2",
       [status, id]
     );
 

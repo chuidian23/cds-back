@@ -1,5 +1,4 @@
 const express = require("express");
-const mysql = require("mysql2/promise");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const app = express();
@@ -12,8 +11,14 @@ const {
   deleteEnrollment,
 } = require("./controllers/enrollmentController");
 
-// 1. Create connection pool
-const pool = require("./db");
+const { Pool } = require("pg");
+const pool = new Pool({
+  connectionString: process.env.DB_URL,
+  ssl:
+    process.env.NODE_ENV === "production"
+      ? { rejectUnauthorized: false }
+      : false,
+});
 
 app.use((req, res, next) => {
   req.pool = pool; // Attach the pool to requests
@@ -204,5 +209,11 @@ app.delete(
 app.use(
   cors({
     origin: ["https://cds-frontend.onrender.com", "http://localhost:3000"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
   })
 );
+
+pool.on("connect", () => console.log("Connected to PostgreSQL"));
+pool.on("error", (err) => console.error("PostgreSQL pool error:", err));
