@@ -4,7 +4,13 @@ const jwt = require("jsonwebtoken");
 const app = express();
 require("dotenv").config();
 const multer = require("multer");
-const upload = multer({ dest: "uploads/" });
+const upload = multer({
+  dest: "uploads/",
+  limits: { fileSize: 5 * 1024 * 1024 },
+}).fields([
+  { name: "receipt", maxCount: 1 },
+  { name: "studentPermit", maxCount: 1 },
+]);
 const {
   createEnrollment,
   updateEnrollmentStatus,
@@ -14,27 +20,33 @@ const {
 const { Pool } = require("pg");
 const pool = new Pool({
   connectionString: process.env.DB_URL,
-  ssl:
-    process.env.NODE_ENV === "production"
-      ? { rejectUnauthorized: false }
-      : false,
+  ssl: {
+    rejectUnauthorized: false, // Required for Render PostgreSQL
+  },
 });
 
+const fs = require("fs");
+if (!fs.existsSync("uploads")) {
+  fs.mkdirSync("uploads");
+}
+
 app.use((req, res, next) => {
-  req.pool = pool; // Attach the pool to requests
+  req.db = pool; // Attach the pool to requests
   next();
 });
 
 // 2. Enhanced CORS configuration
 app.use(
   cors({
-    origin: "http://localhost:3000",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], // Add PUT/DELETE here
+    origin: [
+      "https://cds-frontend.onrender.com", // Your frontend URL
+      "http://localhost:3000", // Keep for local development
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   })
 );
-
 // 3. Body parser middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -88,33 +100,39 @@ app.post("/api/admin/login", async (req, res) => {
 // 6. Admin routes
 app.get("/api/admin/enrollments", authenticateAdmin, async (req, res) => {
   try {
-    const [rows] = await pool.query(`
+    const result = await pool.query(`
       SELECT 
-        id, first_name, last_name, email, mobile_phone, 
-        course, birthdate, gender, civil_status, schedule,
-        payment_method, status, receipt,
-        DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') AS enrollment_date
+        id,
+        first_name,
+        last_name,
+        email,
+        mobile_phone,
+        course,
+        birthdate::text AS birthdate,
+        gender,
+        civil_status,
+        schedule,
+        payment_method,
+        status,
+        receipt,
+        student_permit, 
+        TO_CHAR(created_at, 'YYYY-MM-DD HH24:MI') AS enrollment_date
       FROM enrollments
       ORDER BY created_at DESC
     `);
 
-    const parsedRows = rows.map((row) => {
+    const parsedRows = result.rows.map((row) => {
       try {
+        // Handle JSON parsing safely
         return {
           ...row,
-          schedule: row.schedule
-            ? typeof row.schedule === "string"
+          schedule:
+            typeof row.schedule === "string"
               ? JSON.parse(row.schedule)
-              : row.schedule
-            : [],
+              : row.schedule || [],
         };
       } catch (e) {
-        console.error(
-          `Error parsing schedule for enrollment ${row.id}:`,
-          e,
-          "Raw data:",
-          row.schedule
-        );
+        console.error(`Error parsing schedule for enrollment ${row.id}:`, e);
         return {
           ...row,
           schedule: [],
@@ -131,18 +149,19 @@ app.get("/api/admin/enrollments", authenticateAdmin, async (req, res) => {
 
 app.get("/api/admin/stats", authenticateAdmin, async (req, res) => {
   try {
-    const [[total]] = await pool.query(
-      "SELECT COUNT(*) AS count FROM enrollments"
-    );
-    const [byCourse] = await pool.query(`
-      SELECT course, COUNT(*) AS count
+    const total = await pool.query("SELECT COUNT(*) AS count FROM enrollments");
+    const byCourse = await pool.query(`
+      SELECT 
+        course, 
+        COUNT(*) AS count,
+        TO_CHAR(MAX(created_at), 'YYYY-MM-DD') AS last_enrollment
       FROM enrollments 
       GROUP BY course
     `);
 
     res.json({
-      total_enrollments: total.count,
-      by_course: byCourse,
+      total_enrollments: total.rows[0].count,
+      by_course: byCourse.rows,
     });
   } catch (err) {
     console.error("Admin stats error:", err);
@@ -151,7 +170,7 @@ app.get("/api/admin/stats", authenticateAdmin, async (req, res) => {
 });
 
 // 7. Regular route
-app.post("/api/enrollments", upload.single("receipt"), createEnrollment);
+app.post("/api/enrollments", upload, createEnrollment);
 
 // 8. Error handling middleware
 app.use((err, req, res, next) => {
@@ -175,45 +194,19 @@ app.listen(PORT, () => {
 app.put(
   "/api/admin/enrollments/:id",
   authenticateAdmin,
-  updateEnrollmentStatus,
-  async (req, res) => {
-    try {
-      const [result] = await pool.query(
-        "UPDATE enrollments SET status = ? WHERE id = ?",
-        [req.body.status, req.params.id]
-      );
-      res.json({ success: true });
-    } catch (err) {
-      console.error("Update error:", err);
-      res.status(500).json({ error: "Server error" });
-    }
-  }
+  updateEnrollmentStatus
 );
 
 // Delete enrollment
-app.delete(
-  "/api/admin/enrollments/:id",
-  authenticateAdmin,
-  deleteEnrollment,
-  async (req, res) => {
-    try {
-      await pool.query("DELETE FROM enrollments WHERE id = ?", [req.params.id]);
-      res.json({ success: true });
-    } catch (err) {
-      console.error("Delete error:", err);
-      res.status(500).json({ error: "Server error" });
-    }
-  }
-);
-
-app.use(
-  cors({
-    origin: ["https://cds-frontend.onrender.com", "http://localhost:3000"],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
-  })
-);
+app.delete("/api/admin/enrollments/:id", authenticateAdmin, deleteEnrollment);
 
 pool.on("connect", () => console.log("Connected to PostgreSQL"));
 pool.on("error", (err) => console.error("PostgreSQL pool error:", err));
+pool.on("connect", (client) => {
+  console.log("Connected to database with config:", {
+    user: client.user,
+    database: client.database,
+    host: client.host,
+    port: client.port,
+  });
+});
