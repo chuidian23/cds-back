@@ -44,6 +44,7 @@ app.use(
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
+    exposedHeaders: ["Content-Disposition", "Content-Type"],
     credentials: true,
   })
 );
@@ -69,7 +70,8 @@ const authenticateAdmin = (req, res, next) => {
   }
 };
 
-app.use("/uploads", express.static("uploads"));
+const path = require("path");
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // 5. Admin login route
 app.post("/api/admin/login", async (req, res) => {
